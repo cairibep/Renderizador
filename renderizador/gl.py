@@ -6,9 +6,9 @@
 """
 Biblioteca Gráfica / Graphics Library.
 
-Desenvolvido por: <SEU NOME AQUI>
+Desenvolvido por: Andre e Caio
 Disciplina: Computação Gráfica
-Data: <DATA DE INÍCIO DA IMPLEMENTAÇÃO>
+Data: 17/08
 """
 
 import time         # Para operações com tempo
@@ -103,16 +103,57 @@ class GL:
         # um círculo.
         # O parâmetro colors é um dicionário com os tipos cores possíveis, para o Circle2D
         # você pode assumir o desenho das linhas com a cor emissiva (emissiveColor).
-
-        print("Circle2D : radius = {0}".format(radius)) # imprime no terminal
-        print("Circle2D : colors = {0}".format(colors)) # imprime no terminal as cores
         
-        # Exemplo:
-        pos_x = GL.width//2
-        pos_y = GL.height//2
-        gpu.GPU.draw_pixel([pos_x, pos_y], gpu.GPU.RGB8, [255, 0, 255])  # altera pixel (u, v, tipo, r, g, b)
-        # cuidado com as cores, o X3D especifica de (0,1) e o Framebuffer de (0,255)
-
+        emissive_color = colors.get('emissiveColor', [1.0, 1.0, 1.0])
+        r = int(emissive_color[0] * 255)
+        g = int(emissive_color[1] * 255)
+        b = int(emissive_color[2] * 255)
+        
+        # Converte radius para inteiro
+        radius = int(radius)
+        
+        # Centro do círculo (centro da tela)
+        center_x = GL.width // 2
+        center_y = GL.height // 2
+        
+        # Ajuste na tela
+        max_radius = min(center_x, center_y) - 1
+        if radius > max_radius:
+            radius = max_radius
+        
+        # Segmentos
+        num_segments = 360
+        angle_step = 2 * math.pi / num_segments
+        
+        for i in range(num_segments):
+            # Pontos com as coordenadas
+            angle1 = i * angle_step
+            angle2 = (i + 1) * angle_step
+            
+            x1 = center_x + radius * math.cos(angle1)
+            y1 = center_y + radius * math.sin(angle1)
+            x2 = center_x + radius * math.cos(angle2)
+            y2 = center_y + radius * math.sin(angle2)
+            
+            dx = x2 - x1
+            dy = y2 - y1
+            steps = max(abs(dx), abs(dy))
+            
+            if steps == 0:
+                continue
+                
+            x_inc = dx / steps
+            y_inc = dy / steps
+            x = x1
+            y = y1
+            
+            for _ in range(int(steps) + 1):
+                px = int(round(x))
+                py = int(round(y))
+                if 0 <= px < GL.width and 0 <= py < GL.height:
+                    gpu.GPU.draw_pixel([px, py], gpu.GPU.RGB8, [r, g, b])
+                x += x_inc
+                y += y_inc
 
     @staticmethod
     def triangleSet2D(vertices, colors):
@@ -125,12 +166,47 @@ class GL:
         # quantidade de pontos é sempre multiplo de 3, ou seja, 6 valores ou 12 valores, etc.
         # O parâmetro colors é um dicionário com os tipos cores possíveis, para o TriangleSet2D
         # você pode assumir inicialmente o desenho das linhas com a cor emissiva (emissiveColor).
-        print("TriangleSet2D : vertices = {0}".format(vertices)) # imprime no terminal
-        print("TriangleSet2D : colors = {0}".format(colors)) # imprime no terminal as cores
-
-        # Exemplo:
-        gpu.GPU.draw_pixel([6, 8], gpu.GPU.RGB8, [255, 255, 0])  # altera pixel (u, v, tipo, r, g, b)
-
+        
+        emissive_color = colors.get('emissiveColor', [1.0, 1.0, 1.0])
+        r = int(emissive_color[0] * 255)
+        g = int(emissive_color[1] * 255)
+        b = int(emissive_color[2] * 255)
+        
+        # Processa triângulos de 3 em 3 pontos
+        for i in range(0, len(vertices), 6):
+            if i + 5 < len(vertices):
+                # Extrai os três vértices do triângulo
+                p0 = (int(vertices[i]), int(vertices[i + 1]))
+                p1 = (int(vertices[i + 2]), int(vertices[i + 3]))
+                p2 = (int(vertices[i + 4]), int(vertices[i + 5]))
+                
+                # Desenha o triângulo usando o algoritmo de preenchimento
+                GL._desenha_triangulo_preenchido(p0, p1, p2, [r, g, b])
+    
+    @staticmethod
+    def _desenha_triangulo_preenchido(p0, p1, p2, color):
+        """Função auxiliar para desenhar um triângulo preenchido."""
+        x0, y0 = p0
+        x1, y1 = p1
+        x2, y2 = p2
+        
+        # Limites do retângulo que contém o triângulo
+        min_x = max(0, min(x0, x1, x2))
+        max_x = min(GL.width - 1, max(x0, x1, x2))
+        min_y = max(0, min(y0, y1, y2))
+        max_y = min(GL.height - 1, max(y0, y1, y2))
+        
+        for x in range(min_x, max_x + 1):
+            for y in range(min_y, max_y + 1):
+                det = (x2 - x0) * (y1 - y0) - (x1 - x0) * (y2 - y0)
+                
+                if det != 0:
+                    w0 = ((x2 - x0) * (y - y0) - (x - x0) * (y2 - y0)) / det
+                    w1 = ((x - x0) * (y1 - y0) - (x1 - x0) * (y - y0)) / det
+                    w2 = 1.0 - w0 - w1
+                    
+                    if 0 <= w0 and 0 <= w1 and 0 <= w2:
+                        gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
 
     @staticmethod
     def triangleSet(point, colors):
