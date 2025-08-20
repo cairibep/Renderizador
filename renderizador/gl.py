@@ -44,15 +44,12 @@ class GL:
         # O parâmetro colors é um dicionário com os tipos cores possíveis, para o Polypoint2D
         # você pode assumir inicialmente o desenho dos pontos com a cor emissiva (emissiveColor).
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Polypoint2D : pontos = {0}".format(point)) # imprime no terminal pontos
-        print("Polypoint2D : colors = {0}".format(colors)) # imprime no terminal as cores
+        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        color = [int(255 * c) for c in emissive]
 
-        # Exemplo:
-        pos_x = GL.width//2
-        pos_y = GL.height//2
-        gpu.GPU.draw_pixel([pos_x, pos_y], gpu.GPU.RGB8, [255, 0, 0])  # altera pixel (u, v, tipo, r, g, b)
-        # cuidado com as cores, o X3D especifica de (0,1) e o Framebuffer de (0,255)
+        # Para cada par (x, y) em point
+        for i in range(0, len(point), 2):
+            gpu.GPU.draw_pixel([int(point[i]), int(point[i+1])], gpu.GPU.RGB8, color)
         
     @staticmethod
     def polyline2D(lineSegments, colors):
@@ -68,14 +65,35 @@ class GL:
         # O parâmetro colors é um dicionário com os tipos cores possíveis, para o Polyline2D
         # você pode assumir inicialmente o desenho das linhas com a cor emissiva (emissiveColor).
 
-        print("Polyline2D : lineSegments = {0}".format(lineSegments)) # imprime no terminal
-        print("Polyline2D : colors = {0}".format(colors)) # imprime no terminal as cores
-        
-        # Exemplo:
-        pos_x = GL.width//2
-        pos_y = GL.height//2
-        gpu.GPU.draw_pixel([pos_x, pos_y], gpu.GPU.RGB8, [255, 0, 255])  # altera pixel (u, v, tipo, r, g, b)
-        # cuidado com as cores, o X3D especifica de (0,1) e o Framebuffer de (0,255)
+        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        color = [int(255 * c) for c in emissive]
+
+        # Para cada segmento de linha (ponto i até ponto i+1)
+        for i in range(0, len(lineSegments) - 2, 2):
+            x0 = int(lineSegments[i])
+            y0 = int(lineSegments[i+1])
+            x1 = int(lineSegments[i+2])
+            y1 = int(lineSegments[i+3])
+
+            # Algoritmo simples de linha (DDA)
+            dx = x1 - x0
+            dy = y1 - y0
+            steps = max(abs(dx), abs(dy))
+            if steps == 0:
+                if 0 <= x0 < GL.width and 0 <= y0 < GL.height:
+                    gpu.GPU.draw_pixel([x0, y0], gpu.GPU.RGB8, color)
+                continue
+            x_inc = dx / steps
+            y_inc = dy / steps
+            x = x0
+            y = y0
+            for _ in range(steps + 1):
+                px = int(round(x))
+                py = int(round(y))
+                if 0 <= px < GL.width and 0 <= py < GL.height:
+                    gpu.GPU.draw_pixel([px, py], gpu.GPU.RGB8, color)
+                x += x_inc
+                y += y_inc
 
     @staticmethod
     def circle2D(radius, colors):
