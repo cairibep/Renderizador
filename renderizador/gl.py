@@ -24,6 +24,10 @@ class GL:
     near = 0.01   # plano de corte próximo
     far = 1000    # plano de corte distante
 
+    model_matrix = np.identity(4)
+    view_matrix = np.identity(4)
+    projection_matrix = np.identity(4)
+
     @staticmethod
     def setup(width, height, near=0.01, far=1000):
         """Definr parametros para câmera de razão de aspecto, plano próximo e distante."""
@@ -181,32 +185,23 @@ class GL:
                 p2 = (int(vertices[i + 4]), int(vertices[i + 5]))
                 
                 # Desenha o triângulo usando o algoritmo de preenchimento
-                GL._desenha_triangulo_preenchido(p0, p1, p2, [r, g, b])
-    
+                GL.draw_triangle((p0, p1, p2), [r, g, b])
+
     @staticmethod
-    def _desenha_triangulo_preenchido(p0, p1, p2, color):
-        """Função auxiliar para desenhar um triângulo preenchido."""
-        x0, y0 = p0
-        x1, y1 = p1
-        x2, y2 = p2
-        
-        # Limites do retângulo que contém o triângulo
+    def draw_triangle(pts, color):
+        (x0, y0), (x1, y1), (x2, y2) = pts
         min_x = max(0, min(x0, x1, x2))
         max_x = min(GL.width - 1, max(x0, x1, x2))
         min_y = max(0, min(y0, y1, y2))
         max_y = min(GL.height - 1, max(y0, y1, y2))
-        
+
         for x in range(min_x, max_x + 1):
             for y in range(min_y, max_y + 1):
-                det = (x2 - x0) * (y1 - y0) - (x1 - x0) * (y2 - y0)
-                
-                if det != 0:
-                    w0 = ((x2 - x0) * (y - y0) - (x - x0) * (y2 - y0)) / det
-                    w1 = ((x - x0) * (y1 - y0) - (x1 - x0) * (y - y0)) / det
-                    w2 = 1.0 - w0 - w1
-                    
-                    if 0 <= w0 and 0 <= w1 and 0 <= w2:
-                        gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
+                w0 = (x1 - x0)*(y - y0) - (y1 - y0)*(x - x0)
+                w1 = (x2 - x1)*(y - y1) - (y2 - y1)*(x - x1)
+                w2 = (x0 - x2)*(y - y2) - (y0 - y2)*(x - x2)
+                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+                    gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
 
     @staticmethod
     def triangleSet(point, colors):
@@ -224,13 +219,30 @@ class GL:
         # inicialmente, para o TriangleSet, o desenho das linhas com a cor emissiva
         # (emissiveColor), conforme implementar novos materias você deverá suportar outros
         # tipos de cores.
+        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        color = [int(255 * c) for c in emissive]
+        for i in range(0, len(point), 9):
+            screen_pts = []
+            for j in range(3):
+                idx = i + j*3
+                p = np.array([point[idx], point[idx+1], point[idx+2], 1])
+                p = GL.model_matrix @ p
+                p = GL.view_matrix @ p
+                p = GL.projection_matrix @ p
+                p /= p[3]
+                screen_matrix = np.array([
+                    [GL.width / 2,      0,               0, GL.width / 2],
+                    [0,        -GL.height / 2,           0, GL.height / 2],
+                    [0,                 0,               1,             0],
+                    [0,                 0,               0,             1],
+                ])
+                p_screen = screen_matrix @ p
+                x = int(p_screen[0])
+                y = int(p_screen[1])
+                screen_pts.append((x, y))
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("TriangleSet : pontos = {0}".format(point)) # imprime no terminal pontos
-        print("TriangleSet : colors = {0}".format(colors)) # imprime no terminal as cores
-
-        # Exemplo de desenho de um pixel branco na coordenada 10, 10
-        gpu.GPU.draw_pixel([10, 10], gpu.GPU.RGB8, [255, 255, 255])  # altera pixel
+            if len(screen_pts) == 3:
+                GL.draw_triangle(screen_pts, color)
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
@@ -238,12 +250,48 @@ class GL:
         # Na função de viewpoint você receberá a posição, orientação e campo de visão da
         # câmera virtual. Use esses dados para poder calcular e criar a matriz de projeção
         # perspectiva para poder aplicar nos pontos dos objetos geométricos.
+        eye = np.array(position)
+        at = np.array([0, 0, -1])
+        up = np.array([0, 1, 0])
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Viewpoint : ", end='')
-        print("position = {0} ".format(position), end='')
-        print("orientation = {0} ".format(orientation), end='')
-        print("fieldOfView = {0} ".format(fieldOfView))
+        # aplica orientacao ao at e up
+        x, y, z, angle = orientation
+        R = GL.rotation_matrix_quaternion_axis_angle([x, y, z], angle)
+        at = R @ at
+        
+        up = R @ up
+        at = eye + at
+
+        w = at - eye
+        w = w / np.linalg.norm(w)
+        u = np.cross(w, up)
+        u = u / np.linalg.norm(u)
+        v = np.cross(u, w)
+        v = v / np.linalg.norm(v)
+
+        # monta a matriz camera-to-world
+        m = np.identity(4)
+        m[0, :3] = [u[0], v[0], -w[0]]
+        m[1, :3] = [u[1], v[1], -w[1]]
+        m[2, :3] = [u[2], v[2], -w[2]]
+        m[:3, 3] = eye
+        # inverte para obter world-to-camera
+        GL.view_matrix = np.linalg.inv(m) # matriz lookat
+
+        aspect_ratio = GL.width / GL.height
+        fovy = fieldOfView
+        near = GL.near
+        far = GL.far
+
+        top = near * math.tan(fovy / 2)
+        right = top * aspect_ratio
+
+        GL.projection_matrix = np.array([
+            [near/right, 0, 0, 0],
+            [0, near/top, 0, 0],
+            [0, 0, -(far+near)/(far-near), -(2*far*near)/(far-near)],
+            [0, 0, -1, 0]
+        ])
 
     @staticmethod
     def transform_in(translation, scale, rotation):
@@ -258,16 +306,51 @@ class GL:
         # Quando começar a usar Transforms dentre de outros Transforms, mais a frente no curso
         # Você precisará usar alguma estrutura de dados pilha para organizar as matrizes.
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Transform : ", end='')
+        t = np.identity(4)
         if translation:
-            print("translation = {0} ".format(translation), end='') # imprime no terminal
-        if scale:
-            print("scale = {0} ".format(scale), end='') # imprime no terminal
-        if rotation:
-            print("rotation = {0} ".format(rotation), end='') # imprime no terminal
-        print("")
+            tx, ty, tz = translation
+            t = np.array([
+                [1, 0, 0, tx],
+                [0, 1, 0, ty],
+                [0, 0, 1, tz],
+                [0, 0, 0, 1]
+            ])
 
+        s = np.identity(4)
+        if scale:
+            sx, sy, sz = scale
+            s = np.array([
+                [sx, 0, 0, 0],
+                [0, sy, 0, 0],
+                [0, 0, sz, 0],
+                [0, 0, 0, 1]
+            ])
+            
+        r = np.identity(4)
+        if rotation: # Rotação usando quatérnios
+            x, y, z, angle = rotation
+            rotation_matrix = GL.rotation_matrix_quaternion_axis_angle([x, y, z], angle)
+            r = np.eye(4)
+            r[:3, :3] = rotation_matrix
+
+        GL.model_matrix = t @ r @ s
+
+    @staticmethod
+    def rotation_matrix_quaternion_axis_angle(axis, theta):
+        """Cria a matriz de rotação 3x3 a partir de cálculos com eixo e ângulo envolvendo quatérnios."""
+        axis = np.array(axis, dtype=float)
+        axis = axis / np.linalg.norm(axis)
+        half_theta = theta / 2
+        q_r = np.cos(half_theta)
+        q_xyz = axis * np.sin(half_theta)
+        q = np.array([q_r, *q_xyz])
+        qr, qi, qj, qk = q
+        return np.array([
+            [1 - 2*(qj**2 + qk**2),   2*(qi*qj - qk*qr),     2*(qi*qk + qj*qr)],
+            [2*(qi*qj + qk*qr),       1 - 2*(qi**2 + qk**2), 2*(qj*qk - qi*qr)],
+            [2*(qi*qk - qj*qr),       2*(qj*qk + qi*qr),     1 - 2*(qi**2 + qj**2)]
+        ])
+        
     @staticmethod
     def transform_out():
         """Função usada para renderizar (na verdade coletar os dados) de Transform."""

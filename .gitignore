@@ -3,3 +3,4 @@ __pycache__/
 .vscode/
 *.png
 notebooks/
+renderizador/gl_cleaned.py
