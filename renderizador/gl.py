@@ -27,6 +27,7 @@ class GL:
     model_matrix = np.identity(4)
     view_matrix = np.identity(4)
     projection_matrix = np.identity(4)
+    transform_stack = []
 
     @staticmethod
     def setup(width, height, near=0.01, far=1000):
@@ -307,6 +308,8 @@ class GL:
         # Quando começar a usar Transforms dentre de outros Transforms, mais a frente no curso
         # Você precisará usar alguma estrutura de dados pilha para organizar as matrizes.
 
+        GL.transform_stack.append(GL.model_matrix.copy())
+
         t = np.identity(4)
         if translation:
             tx, ty, tz = translation
@@ -334,7 +337,7 @@ class GL:
             r = np.eye(4)
             r[:3, :3] = rotation_matrix
 
-        GL.model_matrix = t @ r @ s
+        GL.model_matrix = GL.model_matrix @ t @ r @ s # usa a matriz de transformação atual e multiplica pela nova transformação
 
     @staticmethod
     def rotation_matrix_quaternion_axis_angle(axis, theta):
@@ -351,7 +354,7 @@ class GL:
             [2*(qi*qj + qk*qr),       1 - 2*(qi**2 + qk**2), 2*(qj*qk - qi*qr)],
             [2*(qi*qk - qj*qr),       2*(qj*qk + qi*qr),     1 - 2*(qi**2 + qj**2)]
         ])
-        
+
     @staticmethod
     def transform_out():
         """Função usada para renderizar (na verdade coletar os dados) de Transform."""
@@ -360,8 +363,8 @@ class GL:
         # deverá recuperar a matriz de transformação dos modelos do mundo da estrutura de
         # pilha implementada.
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("Saindo de Transform")
+        if GL.transform_stack:
+            GL.model_matrix = GL.transform_stack.pop()
 
     @staticmethod
     def triangleStripSet(point, stripCount, colors):
@@ -378,15 +381,32 @@ class GL:
         # depois 2, 3 e 4, e assim por diante. Cuidado com a orientação dos vértices, ou seja,
         # todos no sentido horário ou todos no sentido anti-horário, conforme especificado.
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("TriangleStripSet : pontos = {0} ".format(point), end='')
-        for i, strip in enumerate(stripCount):
-            print("strip[{0}] = {1} ".format(i, strip), end='')
-        print("")
-        print("TriangleStripSet : colors = {0}".format(colors)) # imprime no terminal as cores
-
-        # Exemplo de desenho de um pixel branco na coordenada 10, 10
-        gpu.GPU.draw_pixel([10, 10], gpu.GPU.RGB8, [255, 255, 255])  # altera pixel
+        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        color = [int(255 * c) for c in emissive]
+        index = 0
+        for count in stripCount:
+            for i in range(count - 2): # cada novo triângulo usa 3 vértices consecutivos (n° triangulos = n° vertices - 2)
+                pts = []
+                for j in range(3):  
+                    idx = (index + i + j)
+                    x, y, z = point[3*idx], point[3*idx+1], point[3*idx+2]
+                    v = np.array([x, y, z, 1])
+                    v = GL.model_matrix @ v
+                    v = GL.view_matrix @ v
+                    v = GL.projection_matrix @ v
+                    v /= v[3]
+                    screen_matrix = np.array([
+                            [GL.width / 2, 0, 0, GL.width / 2],
+                            [0, -GL.height / 2, 0, GL.height / 2],
+                            [0, 0, 1, 0],
+                            [0, 0, 0, 1]
+                    ])
+                    v = screen_matrix @ v
+                    pts.append((int(v[0]), int(v[1])))
+                if i % 2 == 1:
+                    pts[1], pts[2] = pts[2], pts[1] # corrige orientação
+                GL.draw_triangle(pts, color)
+            index += count
 
     @staticmethod
     def indexedTriangleStripSet(point, index, colors):
@@ -404,12 +424,35 @@ class GL:
         # depois 2, 3 e 4, e assim por diante. Cuidado com a orientação dos vértices, ou seja,
         # todos no sentido horário ou todos no sentido anti-horário, conforme especificado.
 
-        # O print abaixo é só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("IndexedTriangleStripSet : pontos = {0}, index = {1}".format(point, index))
-        print("IndexedTriangleStripSet : colors = {0}".format(colors)) # imprime as cores
-
-        # Exemplo de desenho de um pixel branco na coordenada 10, 10
-        gpu.GPU.draw_pixel([10, 10], gpu.GPU.RGB8, [255, 255, 255])  # altera pixel
+        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        color = [int(255 * c) for c in emissive]
+        strip = []
+        for i in index:
+            if i == -1: # fim da sequência de vértices
+                for j in range(len(strip) - 2):
+                    pts = []
+                    for k in range(3):
+                        idx = strip[j + k]
+                        x, y, z = point[3*idx], point[3*idx+1], point[3*idx+2]
+                        v = np.array([x, y, z, 1])
+                        v = GL.model_matrix @ v
+                        v = GL.view_matrix @ v
+                        v = GL.projection_matrix @ v
+                        v /= v[3]
+                        screen_matrix = np.array([
+                            [GL.width / 2, 0, 0, GL.width / 2],
+                            [0, -GL.height / 2, 0, GL.height / 2],
+                            [0, 0, 1, 0],
+                            [0, 0, 0, 1]
+                        ])
+                        v = screen_matrix @ v
+                        pts.append((int(v[0]), int(v[1])))
+                    if j % 2 == 1:
+                        pts[1], pts[2] = pts[2], pts[1]
+                    GL.draw_triangle(pts, color)
+                strip = []
+            else:
+                strip.append(i)
 
     @staticmethod
     def indexedFaceSet(coord, coordIndex, colorPerVertex, color, colorIndex,
@@ -436,23 +479,32 @@ class GL:
         # cor da textura conforme a posição do mapeamento. Dentro da classe GPU já está
         # implementadado um método para a leitura de imagens.
 
-        # Os prints abaixo são só para vocês verificarem o funcionamento, DEVE SER REMOVIDO.
-        print("IndexedFaceSet : ")
-        if coord:
-            print("\tpontos(x, y, z) = {0}, coordIndex = {1}".format(coord, coordIndex))
-        print("colorPerVertex = {0}".format(colorPerVertex))
-        if colorPerVertex and color and colorIndex:
-            print("\tcores(r, g, b) = {0}, colorIndex = {1}".format(color, colorIndex))
-        if texCoord and texCoordIndex:
-            print("\tpontos(u, v) = {0}, texCoordIndex = {1}".format(texCoord, texCoordIndex))
-        if current_texture:
-            image = gpu.GPU.load_texture(current_texture[0])
-            print("\t Matriz com image = {0}".format(image))
-            print("\t Dimensões da image = {0}".format(image.shape))
-        print("IndexedFaceSet : colors = {0}".format(colors))  # imprime no terminal as cores
-
-        # Exemplo de desenho de um pixel branco na coordenada 10, 10
-        gpu.GPU.draw_pixel([10, 10], gpu.GPU.RGB8, [255, 255, 255])  # altera pixel
+        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        base_color = [int(255 * c) for c in emissive]
+        face = []
+        for i in coordIndex:
+            if i == -1:
+                for j in range(1, len(face) - 1): # tecer a geometria conectando o primeiro vértice com os demais
+                    pts = []
+                    for idx in [face[0], face[j], face[j + 1]]:
+                        x, y, z = coord[3*idx], coord[3*idx+1], coord[3*idx+2]
+                        v = np.array([x, y, z, 1])
+                        v = GL.model_matrix @ v
+                        v = GL.view_matrix @ v
+                        v = GL.projection_matrix @ v
+                        v /= v[3]
+                        screen_matrix = np.array([
+                            [GL.width / 2, 0, 0, GL.width / 2],
+                            [0, -GL.height / 2, 0, GL.height / 2],
+                            [0, 0, 1, 0],
+                            [0, 0, 0, 1]
+                            ])
+                        v = screen_matrix @ v
+                        pts.append((int(v[0]), int(v[1])))
+                    GL.draw_triangle(pts, base_color)
+                face = []
+            else:
+                face.append(i)
 
     @staticmethod
     def box(size, colors):
