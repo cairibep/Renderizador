@@ -189,6 +189,49 @@ class GL:
                 GL.draw_triangle((p0, p1, p2), [r, g, b])
 
     @staticmethod
+    def is_inside_triangle(vertices, point):
+        """Verifica se um ponto está dentro de um triângulo."""
+        (x0, y0), (x1, y1), (x2, y2) = vertices
+        x, y = point
+
+        # Cálculo dos vetores
+        v0 = (x2 - x0, y2 - y0)
+        v1 = (x1 - x0, y1 - y0)
+        v2 = (x - x0, y - y0)
+
+        # Cálculo dos produtos escalares
+        dot00 = v0[0] * v0[0] + v0[1] * v0[1]
+        dot01 = v0[0] * v1[0] + v0[1] * v1[1]
+        dot02 = v0[0] * v2[0] + v0[1] * v2[1]
+        dot11 = v1[0] * v1[0] + v1[1] * v1[1]
+        dot12 = v1[0] * v2[0] + v1[1] * v2[1]
+
+        # Cálculo dos coeficientes barycêntricos
+        invDenom = 1 / (dot00 * dot11 - dot01 * dot01)
+        u = (dot11 * dot02 - dot01 * dot12) * invDenom
+        v = (dot00 * dot12 - dot01 * dot02) * invDenom
+
+        return (u >= 0) and (v >= 0) and (u + v <= 1)
+    
+    @staticmethod
+    def calculate_barycentric_coordinates(vertices, point):
+        """Calcula as coordenadas barycêntricas de um ponto em relação a um triângulo."""
+        xA, yA = vertices[0]
+        xB, yB = vertices[1]
+        xC, yC = vertices[2]
+        x, y = point
+
+        # cálculo de alpha
+        alpha = -((x-xB)*(yC-yB) + (y-yB)*(xC-xB)) / -((xA-xB)*(yC-yB) + (yA-yB)*(xC-xB))
+
+        # cálculo de beta
+        beta = -((x-xC)*(yA-yC) + (y-yC)*(xA-xC)) / -((xB-xC)*(yA-yC) + (yB-yC)*(xA-xC))
+
+        gamma = 1 - alpha - beta
+
+        return alpha, beta, gamma
+
+    @staticmethod
     def draw_triangle(pts, color):
         (x0, y0), (x1, y1), (x2, y2) = pts
         min_x = max(0, min(x0, x1, x2))
@@ -198,10 +241,7 @@ class GL:
 
         for x in range(min_x, max_x + 1):
             for y in range(min_y, max_y + 1):
-                w0 = (x1 - x0)*(y - y0) - (y1 - y0)*(x - x0)
-                w1 = (x2 - x1)*(y - y1) - (y2 - y1)*(x - x1)
-                w2 = (x0 - x2)*(y - y2) - (y0 - y2)*(x - x2)
-                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
+                if GL.is_inside_triangle(pts, (x, y)):
                     gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
 
     @staticmethod
