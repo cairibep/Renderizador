@@ -542,15 +542,24 @@ class GL:
                         screen_pts.append((int(p_screen[0]), int(p_screen[1])))
 
                         if colorPerVertex and color:
+                            # Se colorIndex estiver presente, usamos posição do vértice no coordIndex
                             if colorIndex:
-                                c_idx = colorIndex[idx]
+                                # Vamos procurar onde este idx aparece no coordIndex
+                                try:
+                                    c_idx = coordIndex.index(idx)
+                                    c_idx = colorIndex[c_idx] if c_idx < len(colorIndex) else idx
+                                except ValueError:
+                                    c_idx = idx
                             else:
                                 c_idx = idx
 
-                        if 3 * c_idx + 2 < len(color):
-                            rgb = color[3 * c_idx : 3 * c_idx + 3]
-                            if len(rgb) < 3:
-                                rgb += [0] * (3 - len(rgb))  # completa com zeros se necessário
+                            # Pega a cor normalmente
+                            if 3 * c_idx + 2 < len(color):
+                                rgb = color[3 * c_idx : 3 * c_idx + 3]
+                                if len(rgb) < 3:
+                                    rgb += [0] * (3 - len(rgb))
+                            else:
+                                rgb = colors.get("emissiveColor", [1.0, 1.0, 1.0])
                         else:
                             rgb = colors.get("emissiveColor", [1.0, 1.0, 1.0])
 
