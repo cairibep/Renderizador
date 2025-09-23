@@ -180,28 +180,58 @@ class GL:
         # Processa triângulos de 3 em 3 pontos
         for i in range(0, len(vertices), 6):
             if i + 5 < len(vertices):
-                p0 = (int(vertices[i] * 2), int(vertices[i + 1] * 2)) # supersampling 2x2
+                p0 = (int(vertices[i] * 2), int(vertices[i + 1] * 2)) # para supersampling 2x2
                 p1 = (int(vertices[i + 2] * 2), int(vertices[i + 3] * 2))
                 p2 = (int(vertices[i + 4] * 2), int(vertices[i + 5] * 2))
                 
                 # Desenha o triângulo usando o algoritmo de preenchimento
-                GL.draw_triangle((p0, p1, p2), [r, g, b])
+                GL.draw_triangle((p0, p1, p2), [[r, g, b], [r, g, b], [r, g, b]], [1.0, 1.0, 1.0])
 
     @staticmethod
-    def draw_triangle(pts, color):
+    def draw_triangle(pts, colors, z_values):
         (x0, y0), (x1, y1), (x2, y2) = pts
+        c0, c1, c2 = colors
+        z0, z1, z2 = z_values
+
         min_x = max(0, min(x0, x1, x2))
         max_x = min(GL.width - 1, max(x0, x1, x2))
         min_y = max(0, min(y0, y1, y2))
         max_y = min(GL.height - 1, max(y0, y1, y2))
 
+        # Área total para coordenadas baricêntricas
+        def edge_fn(x0, y0, x1, y1, x2, y2):
+            return (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+
+        area = edge_fn(x0, y0, x1, y1, x2, y2)
+
+        if area == 0:
+            return  # triângulo degenerado
+
         for x in range(min_x, max_x + 1):
             for y in range(min_y, max_y + 1):
-                w0 = (x1 - x0)*(y - y0) - (y1 - y0)*(x - x0)
-                w1 = (x2 - x1)*(y - y1) - (y2 - y1)*(x - x1)
-                w2 = (x0 - x2)*(y - y2) - (y0 - y2)*(x - x2)
+                w0 = edge_fn(x1, y1, x2, y2, x, y)
+                w1 = edge_fn(x2, y2, x0, y0, x, y)
+                w2 = edge_fn(x0, y0, x1, y1, x, y)
+
                 if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
-                    gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
+                    alpha = w0 / area
+                    beta = w1 / area
+                    gamma = w2 / area
+
+                    one_over_z = alpha / z0 + beta / z1 + gamma / z2 # corrigir a interpolação com profundidade (Z)
+                    z = 1 / one_over_z
+
+                    def interp_channel(i):
+                        v0 = c0[i] / z0
+                        v1 = c1[i] / z1
+                        v2 = c2[i] / z2
+                        return int(z * (alpha * v0 + beta * v1 + gamma * v2))
+
+                    r = interp_channel(0)
+                    g = interp_channel(1)
+                    b = interp_channel(2)
+
+                    gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, [r, g, b])
 
     @staticmethod
     def triangleSet(point, colors):
@@ -223,6 +253,8 @@ class GL:
         color = [int(255 * c) for c in emissive]
         for i in range(0, len(point), 9):
             screen_pts = []
+            screen_colors = []
+            z_values = []
             for j in range(3):
                 idx = i + j*3
                 p = np.array([point[idx], point[idx+1], point[idx+2], 1])
@@ -230,6 +262,9 @@ class GL:
                 p = GL.view_matrix @ p
                 p = GL.projection_matrix @ p
                 p /= p[3]
+
+                z_values.append(p[2])  # interpolação com Z
+
                 screen_matrix = np.array([
                     [GL.width / 2,      0,               0, GL.width / 2],
                     [0,        -GL.height / 2,           0, GL.height / 2],
@@ -241,8 +276,10 @@ class GL:
                 y = int(p_screen[1])
                 screen_pts.append((x, y))
 
-            if len(screen_pts) == 3:
-                GL.draw_triangle(screen_pts, color)
+                emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+                screen_colors.append([int(255 * c) for c in emissive])
+
+            GL.draw_triangle(screen_pts, screen_colors, z_values)
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
@@ -454,8 +491,7 @@ class GL:
                 strip.append(i)
 
     @staticmethod
-    def indexedFaceSet(coord, coordIndex, colorPerVertex, color, colorIndex,
-                       texCoord, texCoordIndex, colors, current_texture):
+    def indexedFaceSet(coord, coordIndex, colorPerVertex, color, colorIndex, texCoord, texCoordIndex, colors, current_texture):
         """Função usada para renderizar IndexedFaceSet."""
         # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/geometry3D.html#IndexedFaceSet
         # A função indexedFaceSet é usada para desenhar malhas de triângulos. Ela funciona de
@@ -477,41 +513,52 @@ class GL:
         # textura para o poligono, para isso, use as coordenadas de textura e depois aplique a
         # cor da textura conforme a posição do mapeamento. Dentro da classe GPU já está
         # implementadado um método para a leitura de imagens.
-
-        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
-        base_color = [int(255 * c) for c in emissive]
         face = []
         for i in coordIndex:
             if i == -1:
-                for j in range(1, len(face) - 1): # tecer a geometria conectando o primeiro vértice com os demais
-                    pts = []
-                    for idx in [face[0], face[j], face[j + 1]]:
-                        x, y, z = coord[3*idx], coord[3*idx+1], coord[3*idx+2]
-                        v = np.array([x, y, z, 1])
-                        v = GL.model_matrix @ v
-                        v = GL.view_matrix @ v
-                        v = GL.projection_matrix @ v
-                        v /= v[3]
+                for j in range(1, len(face) - 1):  # triângulos: 0,1,2 ; 0,2,3 ; ...
+                    triangle = [face[0], face[j], face[j + 1]]
+                    screen_pts = []
+                    screen_colors = []
+                    z_values = []
+
+                    for k, idx in enumerate(triangle):
+                        x, y, z = coord[3*idx], coord[3*idx+1], coord[3*idx+2] # transformação do vértice
+                        p = np.array([x, y, z, 1])
+                        p = GL.model_matrix @ p
+                        p = GL.view_matrix @ p
+                        p = GL.projection_matrix @ p
+                        p /= p[3]
+
+                        z_values.append(p[2])  # correção de perspectiva
+
                         screen_matrix = np.array([
                             [GL.width / 2, 0, 0, GL.width / 2],
                             [0, -GL.height / 2, 0, GL.height / 2],
                             [0, 0, 1, 0],
                             [0, 0, 0, 1]
-                            ])
-                        v = screen_matrix @ v
-                        colors_for_triangle = []
+                        ])
+                        p_screen = screen_matrix @ p
+                        screen_pts.append((int(p_screen[0]), int(p_screen[1])))
+
                         if colorPerVertex and color:
                             if colorIndex:
-                                c1 = np.array(color[colorIndex[face[0]] * 3 : colorIndex[face[0]] * 3 + 3]) * 255
-                                c2 = np.array(color[colorIndex[face[j]] * 3 : colorIndex[face[j]] * 3 + 3]) * 255
-                                c3 = np.array(color[colorIndex[face[j+1]] * 3 : colorIndex[face[j+1]] * 3 + 3]) * 255
+                                c_idx = colorIndex[idx]
                             else:
-                                c1 = np.array(color[face[0] * 3 : face[0] * 3 + 3]) * 255
-                                c2 = np.array(color[face[j] * 3 : face[j] * 3 + 3]) * 255
-                                c3 = np.array(color[face[j+1] * 3 : face[j+1] * 3 + 3]) * 255
-                            colors_for_triangle = [c1, c2, c3]
-                        pts.append((int(v[0]), int(v[1])))
-                    GL.draw_triangle(pts, base_color, colors_for_triangle)
+                                c_idx = idx
+
+                        if 3 * c_idx + 2 < len(color):
+                            rgb = color[3 * c_idx : 3 * c_idx + 3]
+                            if len(rgb) < 3:
+                                rgb += [0] * (3 - len(rgb))  # completa com zeros se necessário
+                        else:
+                            rgb = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+
+                        rgb = [int(255 * c) for c in rgb]
+                        screen_colors.append(rgb)
+
+                    # Chama função modificada para interpolar com Z
+                    GL.draw_triangle(screen_pts, screen_colors, z_values)
                 face = []
             else:
                 face.append(i)
