@@ -188,7 +188,7 @@ class GL:
                 GL.draw_triangle((p0, p1, p2), [[r, g, b], [r, g, b], [r, g, b]], [1.0, 1.0, 1.0])
 
     @staticmethod
-    def draw_triangle(pts, colors, z_values):
+    def draw_triangle(pts, colors, z_values, alpha=1.0):
         (x0, y0), (x1, y1), (x2, y2) = pts
         c0, c1, c2 = colors
         z0, z1, z2 = z_values
@@ -198,14 +198,12 @@ class GL:
         min_y = max(0, min(y0, y1, y2))
         max_y = min(GL.height - 1, max(y0, y1, y2))
 
-        # Área total para coordenadas baricêntricas
         def edge_fn(x0, y0, x1, y1, x2, y2):
             return (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
 
         area = edge_fn(x0, y0, x1, y1, x2, y2)
-
         if area == 0:
-            return  # triângulo degenerado
+            return
 
         for x in range(min_x, max_x + 1):
             for y in range(min_y, max_y + 1):
@@ -214,27 +212,36 @@ class GL:
                 w2 = edge_fn(x0, y0, x1, y1, x, y)
 
                 if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
-                    alpha = w0 / area
+                    alpha_b = w0 / area
                     beta = w1 / area
                     gamma = w2 / area
 
-                    one_over_z = alpha / z0 + beta / z1 + gamma / z2 # corrigir a interpolação com profundidade (Z)
+                    one_over_z = alpha_b / z0 + beta / z1 + gamma / z2
                     z = 1 / one_over_z
 
                     def interp_channel(i):
                         v0 = c0[i] / z0
                         v1 = c1[i] / z1
                         v2 = c2[i] / z2
-                        return int(z * (alpha * v0 + beta * v1 + gamma * v2))
+                        return int(z * (alpha_b * v0 + beta * v1 + gamma * v2))
 
                     r = interp_channel(0)
                     g = interp_channel(1)
                     b = interp_channel(2)
 
-                    z_buffer_value = gpu.GPU.read_pixel([x, y], gpu.GPU.DEPTH_COMPONENT32F)
+                    z_buffer = gpu.GPU.read_pixel([x, y], gpu.GPU.DEPTH_COMPONENT32F)
 
-                    if z < z_buffer_value:
-                        gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, [r, g, b])
+                    if z < z_buffer:
+                        if alpha < 1.0: # blending
+                            cor_ant = gpu.GPU.read_pixel([x, y], gpu.GPU.RGB8)
+                            r_final = int(cor_ant[0] * alpha + r * (1 - alpha))
+                            g_final = int(cor_ant[1] * alpha + g * (1 - alpha))
+                            b_final = int(cor_ant[2] * alpha + b * (1 - alpha))
+                            cor_final = [r_final, g_final, b_final]
+                        else:
+                            cor_final = [r, g, b]
+
+                        gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, cor_final)
                         gpu.GPU.draw_pixel([x, y], gpu.GPU.DEPTH_COMPONENT32F, [z])
 
     @staticmethod
@@ -283,7 +290,10 @@ class GL:
                 emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
                 screen_colors.append([int(255 * c) for c in emissive])
 
-            GL.draw_triangle(screen_pts, screen_colors, z_values)
+            transparency = colors.get("transparency", 0.0)
+            alpha = 1.0 - transparency
+
+            GL.draw_triangle(screen_pts, screen_colors, z_values, alpha)
 
     @staticmethod
     def viewpoint(position, orientation, fieldOfView):
@@ -544,6 +554,11 @@ class GL:
         # cor da textura conforme a posição do mapeamento. Dentro da classe GPU já está
         # implementadado um método para a leitura de imagens.
         face = []
+
+        emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+        transparency = colors.get("transparency", 0.0)
+        alpha = 1.0 - transparency
+
         for i in coordIndex:
             if i == -1:
                 for j in range(1, len(face) - 1):  # triângulos: 0,1,2 ; 0,2,3 ; ...
@@ -553,14 +568,15 @@ class GL:
                     z_values = []
 
                     for k, idx in enumerate(triangle):
-                        x, y, z = coord[3*idx], coord[3*idx+1], coord[3*idx+2] # transformação do vértice
+                        # transformação do vértice para espaço da tela
+                        x, y, z = coord[3*idx], coord[3*idx+1], coord[3*idx+2]
                         p = np.array([x, y, z, 1])
                         p = GL.model_matrix @ p
                         p = GL.view_matrix @ p
                         p = GL.projection_matrix @ p
                         p /= p[3]
 
-                        z_values.append(p[2])  # correção de perspectiva
+                        z_values.append(p[2])
 
                         screen_matrix = np.array([
                             [GL.width / 2, 0, 0, GL.width / 2],
@@ -586,14 +602,14 @@ class GL:
                                 if len(rgb) < 3:
                                     rgb += [0] * (3 - len(rgb))
                             else:
-                                rgb = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+                                rgb = emissive
                         else:
-                            rgb = colors.get("emissiveColor", [1.0, 1.0, 1.0])
+                            rgb = emissive
 
                         rgb = [int(255 * c) for c in rgb]
                         screen_colors.append(rgb)
-
-                    GL.draw_triangle(screen_pts, screen_colors, z_values)
+                    
+                    GL.draw_triangle(screen_pts, screen_colors, z_values, alpha) # chamada com alpha (transparência)
                 face = []
             else:
                 face.append(i)
