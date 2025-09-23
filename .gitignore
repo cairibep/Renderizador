@@ -4,3 +4,4 @@ __pycache__/
 *.png
 notebooks/
 renderizador/gl_cleaned.py
+renderizador/renderizador_cleaned.py

@@ -188,10 +188,15 @@ class GL:
                 GL.draw_triangle((p0, p1, p2), [[r, g, b], [r, g, b], [r, g, b]], [1.0, 1.0, 1.0])
 
     @staticmethod
-    def draw_triangle(pts, colors, z_values, alpha=1.0):
+    def draw_triangle(pts, colors, z_values, alpha=1.0, uv_coords=None, texture_sampler=None):
         (x0, y0), (x1, y1), (x2, y2) = pts
         c0, c1, c2 = colors
         z0, z1, z2 = z_values
+
+        if uv_coords:
+            (u0, v0), (u1, v1), (u2, v2) = uv_coords
+        else:
+            u0 = u1 = u2 = v0 = v1 = v2 = 0
 
         min_x = max(0, min(x0, x1, x2))
         max_x = min(GL.width - 1, max(x0, x1, x2))
@@ -219,20 +224,27 @@ class GL:
                     one_over_z = alpha_b / z0 + beta / z1 + gamma / z2
                     z = 1 / one_over_z
 
-                    def interp_channel(i):
-                        v0 = c0[i] / z0
-                        v1 = c1[i] / z1
-                        v2 = c2[i] / z2
-                        return int(z * (alpha_b * v0 + beta * v1 + gamma * v2))
+                    def interp(v0, v1, v2):
+                        return z * (alpha_b * v0 / z0 + beta * v1 / z1 + gamma * v2 / z2)
 
-                    r = interp_channel(0)
-                    g = interp_channel(1)
-                    b = interp_channel(2)
+                    if texture_sampler is not None and uv_coords is not None:
+                        u = interp(u0, u1, u2)
+                        v = interp(v0, v1, v2)
+                        tex_color = texture_sampler(u, v)
+                        r, g, b = tex_color
+                    else:
+                        r = interp(c0[0], c1[0], c2[0])
+                        g = interp(c0[1], c1[1], c2[1])
+                        b = interp(c0[2], c1[2], c2[2])
+
+                    r = int(r)
+                    g = int(g)
+                    b = int(b)
 
                     z_buffer = gpu.GPU.read_pixel([x, y], gpu.GPU.DEPTH_COMPONENT32F)
 
                     if z < z_buffer:
-                        if alpha < 1.0: # blending
+                        if alpha < 1.0:
                             cor_ant = gpu.GPU.read_pixel([x, y], gpu.GPU.RGB8)
                             r_final = int(cor_ant[0] * alpha + r * (1 - alpha))
                             g_final = int(cor_ant[1] * alpha + g * (1 - alpha))
@@ -243,6 +255,22 @@ class GL:
 
                         gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, cor_final)
                         gpu.GPU.draw_pixel([x, y], gpu.GPU.DEPTH_COMPONENT32F, [z])
+    
+    @staticmethod
+    def build_texture_sampler(image):
+        height, width, channels = image.shape
+
+        def sampler(u, v):
+            u = min(max(u, 0.0), 1.0)
+            v = min(max(v, 0.0), 1.0)
+
+            x = int((1 - v) * (width - 1))
+            y = int(u * (height - 1))  
+
+            color = image[y, x]
+            return [int(color[0]), int(color[1]), int(color[2])]
+
+        return sampler
 
     @staticmethod
     def triangleSet(point, colors):
@@ -553,29 +581,38 @@ class GL:
         # textura para o poligono, para isso, use as coordenadas de textura e depois aplique a
         # cor da textura conforme a posição do mapeamento. Dentro da classe GPU já está
         # implementadado um método para a leitura de imagens.
-        face = []
-
         emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
         transparency = colors.get("transparency", 0.0)
         alpha = 1.0 - transparency
 
-        for i in coordIndex:
-            if i == -1:
-                for j in range(1, len(face) - 1):  # triângulos: 0,1,2 ; 0,2,3 ; ...
+        texture_sampler = None
+        if current_texture:
+            image = gpu.GPU.load_texture(current_texture[0])
+            texture_sampler = GL.build_texture_sampler(image)
+
+        face = []
+        tex_face = []
+
+        for i in range(len(coordIndex)):
+            idx = coordIndex[i]
+
+            if idx == -1:
+                for j in range(1, len(face) - 1):
                     triangle = [face[0], face[j], face[j + 1]]
+                    tex_triangle = [tex_face[0], tex_face[j], tex_face[j + 1]] if len(tex_face) >= 3 else [(0, 0), (0, 0), (0, 0)]
+
                     screen_pts = []
                     screen_colors = []
                     z_values = []
+                    uv_coords = []
 
-                    for k, idx in enumerate(triangle):
-                        # transformação do vértice para espaço da tela
-                        x, y, z = coord[3*idx], coord[3*idx+1], coord[3*idx+2]
+                    for k, idx_v in enumerate(triangle):
+                        x, y, z = coord[3 * idx_v], coord[3 * idx_v + 1], coord[3 * idx_v + 2]
                         p = np.array([x, y, z, 1])
                         p = GL.model_matrix @ p
                         p = GL.view_matrix @ p
                         p = GL.projection_matrix @ p
                         p /= p[3]
-
                         z_values.append(p[2])
 
                         screen_matrix = np.array([
@@ -587,32 +624,38 @@ class GL:
                         p_screen = screen_matrix @ p
                         screen_pts.append((int(p_screen[0]), int(p_screen[1])))
 
-                        if colorPerVertex and color:
-                            if colorIndex:
-                                try:
-                                    c_idx = coordIndex.index(idx)
-                                    c_idx = colorIndex[c_idx] if c_idx < len(colorIndex) else idx
-                                except ValueError:
-                                    c_idx = idx
-                            else:
-                                c_idx = idx
+                        # textura
+                        if texCoordIndex and texCoord and texture_sampler:
+                            try:
+                                tex_idx = tex_triangle[k]
+                                u = texCoord[2 * tex_idx]
+                                v = texCoord[2 * tex_idx + 1]
+                                uv_coords.append((u, v))
+                            except:
+                                uv_coords.append((0.0, 0.0))
 
-                            if 3 * c_idx + 2 < len(color):
-                                rgb = color[3 * c_idx : 3 * c_idx + 3]
+                        # cor por vértice
+                        if colorPerVertex and color:
+                            try:
+                                c_idx = colorIndex[i] if colorIndex else idx_v
+                                rgb = color[3 * c_idx: 3 * c_idx + 3]
                                 if len(rgb) < 3:
                                     rgb += [0] * (3 - len(rgb))
-                            else:
+                            except:
                                 rgb = emissive
                         else:
                             rgb = emissive
 
-                        rgb = [int(255 * c) for c in rgb]
-                        screen_colors.append(rgb)
-                    
-                    GL.draw_triangle(screen_pts, screen_colors, z_values, alpha) # chamada com alpha (transparência)
+                        screen_colors.append([int(255 * c) for c in rgb])
+
+                    GL.draw_triangle(screen_pts, screen_colors, z_values, alpha, uv_coords, texture_sampler)
+
                 face = []
+                tex_face = []
             else:
-                face.append(i)
+                face.append(idx)
+                if texCoordIndex and i < len(texCoordIndex):
+                    tex_face.append(texCoordIndex[i])
 
     @staticmethod
     def box(size, colors):
