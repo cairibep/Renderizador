@@ -163,7 +163,6 @@ class GL:
 
     @staticmethod
     def project_vertex(vertex):
-        print( "Projecting vertex:")
         """Aplica a transformação e projeção a um vértice."""
         vertex_homogeneous = np.append(vertex, 1)  # Coordenadas homogêneas
 
@@ -600,82 +599,158 @@ class GL:
     @staticmethod
     def indexedFaceSet(coord, coordIndex, colorPerVertex, color, colorIndex,
                        texCoord, texCoordIndex, colors, current_texture):
-        """Função usada para renderizar IndexedFaceSet."""
-        # https://www.web3d.org/specifications/X3Dv4/ISO-IEC19775-1v4-IS/Part01/components/geometry3D.html#IndexedFaceSet
-        # A função indexedFaceSet é usada para desenhar malhas de triângulos. Ela funciona de
-        # forma muito simular a IndexedTriangleStripSet porém com mais recursos.
-        # Você receberá as coordenadas dos pontos no parâmetro cord, esses
-        # pontos são uma lista de pontos x, y, e z sempre na ordem. Assim coord[0] é o valor
-        # da coordenada x do primeiro ponto, coord[1] o valor y do primeiro ponto, coord[2]
-        # o valor z da coordenada z do primeiro ponto. Já coord[3] é a coordenada x do
-        # segundo ponto e assim por diante. No IndexedFaceSet uma lista de vértices é informada
-        # em coordIndex, o valor -1 indica que a lista acabou.
-        # A ordem de conexão não possui uma ordem oficial, mas em geral se o primeiro ponto com os dois
-        # seguintes e depois este mesmo primeiro ponto com o terçeiro e quarto ponto. Por exemplo: numa
-        # sequencia 0, 1, 2, 3, 4, -1 o primeiro triângulo será com os vértices 0, 1 e 2, depois serão
-        # os vértices 0, 2 e 3, e depois 0, 3 e 4, e assim por diante, até chegar no final da lista.
-        # Adicionalmente essa implementação do IndexedFace aceita cores por vértices, assim
-        # se a flag colorPerVertex estiver habilitada, os vértices também possuirão cores
-        # que servem para definir a cor interna dos poligonos, para isso faça um cálculo
-        # baricêntrico de que cor deverá ter aquela posição. Da mesma forma se pode definir uma
-        # textura para o poligono, para isso, use as coordenadas de textura e depois aplique a
-        # cor da textura conforme a posição do mapeamento. Dentro da classe GPU já está
-        # implementadado um método para a leitura de imagens.
-        print("IndexedFaceSet")
+        """
+        Renderiza IndexedFaceSet - malhas de triângulos indexadas com suporte a cores e texturas.
+        
+        Esta função implementa o nó IndexedFaceSet do X3D, permitindo desenhar malhas complexas
+        de forma eficiente através de indexação de vértices. Suporta:
+        - Triangulação automática de faces (fan triangulation)
+        - Cores por vértice com interpolação baricêntrica
+        - Mapeamento de texturas com coordenadas UV
+        - Depth testing e transparência
+        
+        Args:
+            coord: Lista de coordenadas dos vértices [x1,y1,z1, x2,y2,z2, ...]
+            coordIndex: Índices dos vértices para cada face, separados por -1
+            colorPerVertex: Flag indicando se cores são definidas por vértice
+            color: Lista de cores [r1,g1,b1, r2,g2,b2, ...]
+            colorIndex: Índices das cores correspondentes aos vértices
+            texCoord: Coordenadas de textura [u1,v1, u2,v2, ...]
+            texCoordIndex: Índices das coordenadas de textura
+            colors: Dicionário com propriedades de material (emissiveColor, transparency)
+            current_texture: Lista com caminhos para texturas
+        """        
+        # ====== INICIALIZAÇÃO E PRÉ-PROCESSAMENTO ======
+        
+        # Carrega e gera mipmaps da textura se especificada
         texture = None
         if current_texture:
             texture = gpu.GPU.load_texture(current_texture[0])
             texture = GL.generate_mipmaps(texture)
 
-        # Conversão da cor emissiva
-        emissiveColor = np.array(colors['emissiveColor']) * 255
-        emissiveColor = emissiveColor.astype(int)
-
-        face = []
-        color_idxs = []
-        tex_idxs = []
-
-        for i in coordIndex:
-            if i == -1:
-                for j in range(1, len(face) - 1):
-                    idx1 = face[0]
-                    idx2 = face[j]
-                    idx3 = face[j + 1]
-
-                    p1 = np.array(coord[idx1 * 3:idx1 * 3 + 3])
-                    p2 = np.array(coord[idx2 * 3:idx2 * 3 + 3])
-                    p3 = np.array(coord[idx3 * 3:idx3 * 3 + 3])
-
-                    p1_2d, z1 = GL.project_vertex(p1)
-                    p2_2d, z2 = GL.project_vertex(p2)
-                    p3_2d, z3 = GL.project_vertex(p3)
-
-                    colors_for_interpol = [emissiveColor, emissiveColor, emissiveColor]
-
-                    if colorPerVertex and colorIndex:
-                        c1 = np.array(color[color_idxs[0] * 3: color_idxs[0] * 3 + 3]) * 255
-                        c2 = np.array(color[color_idxs[j] * 3: color_idxs[j] * 3 + 3]) * 255
-                        c3 = np.array(color[color_idxs[j + 1] * 3: color_idxs[j + 1] * 3 + 3]) * 255
-
-                        colors_for_interpol = [c1, c2, c3]
+        # Converte cor emissiva para valores RGB 0-255
+        emissiveColor = (np.array(colors['emissiveColor']) * 255).astype(int)
+        
+        # Converte coordenadas para array numpy para acesso mais eficiente
+        coord_array = np.array(coord).reshape(-1, 3)  # Shape: (num_vertices, 3)
+        
+        # Pre-computa cores por vértice se disponíveis (otimização)
+        vertex_colors = None
+        if colorPerVertex and color:
+            color_array = np.array(color).reshape(-1, 3)
+            vertex_colors = (color_array * 255).astype(int)
+        
+        # Pre-computa coordenadas de textura se disponíveis (otimização)
+        tex_coords = None
+        if texCoord:
+            tex_coords = np.array(texCoord).reshape(-1, 2)  # Shape: (num_tex_coords, 2)
+        
+        # Cache para vértices projetados (evita reprojeções desnecessárias)
+        projected_cache = {}
+        
+        # ====== PROCESSAMENTO DE FACES ======
+        
+        i = 0
+        face_indices = []      # Índices dos vértices da face atual
+        face_color_indices = [] # Índices das cores da face atual  
+        face_tex_indices = []   # Índices das coordenadas de textura da face atual
+        
+        # Percorre todos os índices de coordenadas
+        while i < len(coordIndex):
+            current_index = coordIndex[i]
+            
+            if current_index == -1:
+                # ====== FINALIZAÇÃO DE UMA FACE ======
+                # Quando encontra -1, processa a face acumulada
+                
+                if len(face_indices) >= 3:  # Precisa de pelo menos 3 vértices
+                    # Triangulação em leque (fan triangulation):
+                    # Face com vértices [0,1,2,3,4] vira triângulos: (0,1,2), (0,2,3), (0,3,4)
                     
-                    uv = []
-                    if current_texture:
-                        u = [texCoord[tex_idxs[j + 1] * 2], texCoord[tex_idxs[j] * 2], texCoord[tex_idxs[0] * 2]]
-                        v = [texCoord[tex_idxs[j + 1] * 2 + 1], texCoord[tex_idxs[j] * 2 + 1], texCoord[tex_idxs[0] * 2 + 1]]
-                        uv = [u, v]
-
-                    GL.rasterize_triangle([p1_2d, p2_2d, p3_2d], colors_for_interpol, z_coords=[z1, z2, z3], texture=texture, uv=uv)
-                    
-                face = []
-                color_idxs = []
-                tex_idxs = []
+                    for triangle_idx in range(1, len(face_indices) - 1):
+                        # Índices dos 3 vértices do triângulo atual
+                        idx1 = face_indices[0]                    # Vértice central (sempre o primeiro)
+                        idx2 = face_indices[triangle_idx]         # Vértice atual da sequência
+                        idx3 = face_indices[triangle_idx + 1]     # Próximo vértice da sequência
+                        
+                        # ====== PROJEÇÃO DE VÉRTICES COM CACHE ======
+                        # Usa cache para evitar reprojeções desnecessárias
+                        
+                        if idx1 not in projected_cache:
+                            p1_2d, z1 = GL.project_vertex(coord_array[idx1])
+                            projected_cache[idx1] = (p1_2d, z1)
+                        else:
+                            p1_2d, z1 = projected_cache[idx1]
+                            
+                        if idx2 not in projected_cache:
+                            p2_2d, z2 = GL.project_vertex(coord_array[idx2])
+                            projected_cache[idx2] = (p2_2d, z2)
+                        else:
+                            p2_2d, z2 = projected_cache[idx2]
+                            
+                        if idx3 not in projected_cache:
+                            p3_2d, z3 = GL.project_vertex(coord_array[idx3])
+                            projected_cache[idx3] = (p3_2d, z3)
+                        else:
+                            p3_2d, z3 = projected_cache[idx3]
+                        
+                        # ====== PREPARAÇÃO DAS CORES ======
+                        # Define cores para interpolação nos vértices do triângulo
+                        
+                        colors_for_interpol = [emissiveColor, emissiveColor, emissiveColor]
+                        
+                        if colorPerVertex and colorIndex and vertex_colors is not None:
+                            # Usa cores específicas por vértice
+                            c1 = vertex_colors[face_color_indices[0]]
+                            c2 = vertex_colors[face_color_indices[triangle_idx]]
+                            c3 = vertex_colors[face_color_indices[triangle_idx + 1]]
+                            colors_for_interpol = [c1, c2, c3]
+                        
+                        # ====== PREPARAÇÃO DAS COORDENADAS UV ======
+                        # Configura mapeamento de textura se disponível
+                        
+                        uv_coords = []
+                        if current_texture and tex_coords is not None and texCoordIndex:
+                            # Coordenadas UV dos 3 vértices do triângulo
+                            # Ordem ajustada para compatibilidade com rasterização
+                            tex_idx1 = face_tex_indices[triangle_idx + 1]  # Invertida para correção
+                            tex_idx2 = face_tex_indices[triangle_idx]      # de orientação UV
+                            tex_idx3 = face_tex_indices[0]
+                            
+                            u_coords = [tex_coords[tex_idx1, 0], tex_coords[tex_idx2, 0], tex_coords[tex_idx3, 0]]
+                            v_coords = [tex_coords[tex_idx1, 1], tex_coords[tex_idx2, 1], tex_coords[tex_idx3, 1]]
+                            uv_coords = [u_coords, v_coords]
+                        
+                        # ====== RASTERIZAÇÃO DO TRIÂNGULO ======
+                        # Renderiza o triângulo final com todas as propriedades
+                        
+                        GL.rasterize_triangle(
+                            vertices=[p1_2d, p2_2d, p3_2d],
+                            colors=colors_for_interpol,
+                            z_coords=[z1, z2, z3],
+                            texture=texture,
+                            uv=uv_coords if uv_coords else None
+                        )
+                
+                # Reset das listas para a próxima face
+                face_indices = []
+                face_color_indices = []
+                face_tex_indices = []
+                
             else:
-                face.append(i)
-                if colorPerVertex and colorIndex:
-                    color_idxs.append(colorIndex[len(face)-1])
-                if texCoordIndex:
-                    tex_idxs.append(texCoordIndex[len(face)-1])
+                # ====== ACUMULAÇÃO DE ÍNDICES PARA A FACE ATUAL ======
+                # Adiciona índice do vértice à face atual
+                face_indices.append(current_index)
+                
+                # Adiciona índice de cor se disponível
+                if colorIndex and i < len(colorIndex):
+                    face_color_indices.append(colorIndex[i])
+                
+                # Adiciona índice de coordenada de textura se disponível  
+                if texCoordIndex and i < len(texCoordIndex):
+                    face_tex_indices.append(texCoordIndex[i])
+            
+            i += 1
 
     @staticmethod
     def box(size, colors):
