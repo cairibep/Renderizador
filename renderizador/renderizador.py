@@ -11,7 +11,7 @@ Data: 28 de Agosto de 2020
 
 import os           # Para rotinas do sistema operacional
 import argparse     # Para tratar os parâmetros da linha de comando
-
+import numpy as np  # Para operações matemáticas
 import gl           # Recupera rotinas de suporte ao X3D
 
 import interface    # Janela de visualização baseada no Matplotlib
@@ -41,11 +41,11 @@ class Renderizador:
         # Configurando color buffers para exibição na tela
 
         # Cria uma (1) posição de FrameBuffer na GPU
-        fbo = gpu.GPU.gen_framebuffers(1)
+        fbo = gpu.GPU.gen_framebuffers(2)
 
         # Define o atributo FRONT como o FrameBuffe principal
         self.framebuffers["FRONT"] = fbo[0]
-
+        self.framebuffers["OUTPUT"] = fbo[1]
         # Define que a posição criada será usada para desenho e leitura
         gpu.GPU.bind_framebuffer(gpu.GPU.FRAMEBUFFER, self.framebuffers["FRONT"])
         # Opções:
@@ -58,6 +58,13 @@ class Renderizador:
         # Memória de Framebuffer para canal de cores
         gpu.GPU.framebuffer_storage(
             self.framebuffers["FRONT"],
+            gpu.GPU.COLOR_ATTACHMENT,
+            gpu.GPU.RGB8,
+            self.width * 2,
+            self.height * 2
+        )
+        gpu.GPU.framebuffer_storage(
+            self.framebuffers["OUTPUT"],
             gpu.GPU.COLOR_ATTACHMENT,
             gpu.GPU.RGB8,
             self.width,
@@ -100,7 +107,6 @@ class Renderizador:
 
         # Limpa o frame buffers atual
         gpu.GPU.clear_buffer()
-
         # Recursos que podem ser úteis:
         # Define o valor do pixel no framebuffer: draw_pixel(coord, mode, data)
         # Retorna o valor do pixel no framebuffer: read_pixel(coord, mode)
@@ -112,10 +118,22 @@ class Renderizador:
         # Essa é uma chamada conveniente para manipulação de buffers
         # ao final da renderização de um frame. Como por exemplo, executar
         # downscaling da imagem.
+        buffer = gpu.GPU.get_frame_buffer()
+        gpu.GPU.bind_framebuffer(gpu.GPU.FRAMEBUFFER, self.framebuffers["OUTPUT"])
+        height, width = buffer.shape[:2]
+        
+        for row in range(0, height, 2):
+            for col in range(0, width, 2):
+                pixels_2x2 = buffer[row:row+2, col:col+2]
+                r = np.mean(pixels_2x2[:, :, 0])
+                g = np.mean(pixels_2x2[:, :, 1])
+                b = np.mean(pixels_2x2[:, :, 2])
+                color = [int(r), int(g), int(b)]
+                gpu.GPU.draw_pixel([col // 2, row // 2], gpu.GPU.RGB8, color)
 
         # Método para a troca dos buffers (NÃO IMPLEMENTADO)
         # Esse método será utilizado na fase de implementação de animações
-        gpu.GPU.swap_buffers()
+        # gpu.GPU.swap_buffers()
 
     def mapping(self):
         """Mapeamento de funções para as rotinas de renderização."""

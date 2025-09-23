@@ -32,8 +32,8 @@ class GL:
     @staticmethod
     def setup(width, height, near=0.01, far=1000):
         """Definr parametros para câmera de razão de aspecto, plano próximo e distante."""
-        GL.width = width
-        GL.height = height
+        GL.width = width * 2 # para supersampling 2x2
+        GL.height = height * 2
         GL.near = near
         GL.far = far
 
@@ -180,56 +180,12 @@ class GL:
         # Processa triângulos de 3 em 3 pontos
         for i in range(0, len(vertices), 6):
             if i + 5 < len(vertices):
-                # Extrai os três vértices do triângulo
-                p0 = (int(vertices[i]), int(vertices[i + 1]))
-                p1 = (int(vertices[i + 2]), int(vertices[i + 3]))
-                p2 = (int(vertices[i + 4]), int(vertices[i + 5]))
+                p0 = (int(vertices[i] * 2), int(vertices[i + 1] * 2)) # supersampling 2x2
+                p1 = (int(vertices[i + 2] * 2), int(vertices[i + 3] * 2))
+                p2 = (int(vertices[i + 4] * 2), int(vertices[i + 5] * 2))
                 
                 # Desenha o triângulo usando o algoritmo de preenchimento
                 GL.draw_triangle((p0, p1, p2), [r, g, b])
-
-    @staticmethod
-    def is_inside_triangle(vertices, point):
-        """Verifica se um ponto está dentro de um triângulo."""
-        (x0, y0), (x1, y1), (x2, y2) = vertices
-        x, y = point
-
-        # Cálculo dos vetores
-        v0 = (x2 - x0, y2 - y0)
-        v1 = (x1 - x0, y1 - y0)
-        v2 = (x - x0, y - y0)
-
-        # Cálculo dos produtos escalares
-        dot00 = v0[0] * v0[0] + v0[1] * v0[1]
-        dot01 = v0[0] * v1[0] + v0[1] * v1[1]
-        dot02 = v0[0] * v2[0] + v0[1] * v2[1]
-        dot11 = v1[0] * v1[0] + v1[1] * v1[1]
-        dot12 = v1[0] * v2[0] + v1[1] * v2[1]
-
-        # Cálculo dos coeficientes barycêntricos
-        invDenom = 1 / (dot00 * dot11 - dot01 * dot01)
-        u = (dot11 * dot02 - dot01 * dot12) * invDenom
-        v = (dot00 * dot12 - dot01 * dot02) * invDenom
-
-        return (u >= 0) and (v >= 0) and (u + v <= 1)
-    
-    @staticmethod
-    def calculate_barycentric_coordinates(vertices, point):
-        """Calcula as coordenadas barycêntricas de um ponto em relação a um triângulo."""
-        xA, yA = vertices[0]
-        xB, yB = vertices[1]
-        xC, yC = vertices[2]
-        x, y = point
-
-        # cálculo de alpha
-        alpha = -((x-xB)*(yC-yB) + (y-yB)*(xC-xB)) / -((xA-xB)*(yC-yB) + (yA-yB)*(xC-xB))
-
-        # cálculo de beta
-        beta = -((x-xC)*(yA-yC) + (y-yC)*(xA-xC)) / -((xB-xC)*(yA-yC) + (yB-yC)*(xA-xC))
-
-        gamma = 1 - alpha - beta
-
-        return alpha, beta, gamma
 
     @staticmethod
     def draw_triangle(pts, color):
@@ -241,7 +197,10 @@ class GL:
 
         for x in range(min_x, max_x + 1):
             for y in range(min_y, max_y + 1):
-                if GL.is_inside_triangle(pts, (x, y)):
+                w0 = (x1 - x0)*(y - y0) - (y1 - y0)*(x - x0)
+                w1 = (x2 - x1)*(y - y1) - (y2 - y1)*(x - x1)
+                w2 = (x0 - x2)*(y - y2) - (y0 - y2)*(x - x2)
+                if (w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0):
                     gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, color)
 
     @staticmethod
@@ -540,8 +499,19 @@ class GL:
                             [0, 0, 0, 1]
                             ])
                         v = screen_matrix @ v
+                        colors_for_triangle = []
+                        if colorPerVertex and color:
+                            if colorIndex:
+                                c1 = np.array(color[colorIndex[face[0]] * 3 : colorIndex[face[0]] * 3 + 3]) * 255
+                                c2 = np.array(color[colorIndex[face[j]] * 3 : colorIndex[face[j]] * 3 + 3]) * 255
+                                c3 = np.array(color[colorIndex[face[j+1]] * 3 : colorIndex[face[j+1]] * 3 + 3]) * 255
+                            else:
+                                c1 = np.array(color[face[0] * 3 : face[0] * 3 + 3]) * 255
+                                c2 = np.array(color[face[j] * 3 : face[j] * 3 + 3]) * 255
+                                c3 = np.array(color[face[j+1] * 3 : face[j+1] * 3 + 3]) * 255
+                            colors_for_triangle = [c1, c2, c3]
                         pts.append((int(v[0]), int(v[1])))
-                    GL.draw_triangle(pts, base_color)
+                    GL.draw_triangle(pts, base_color, colors_for_triangle)
                 face = []
             else:
                 face.append(i)
