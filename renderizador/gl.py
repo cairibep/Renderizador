@@ -231,7 +231,11 @@ class GL:
                     g = interp_channel(1)
                     b = interp_channel(2)
 
-                    gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, [r, g, b])
+                    z_buffer_value = gpu.GPU.read_pixel([x, y], gpu.GPU.DEPTH_COMPONENT32F)
+
+                    if z < z_buffer_value:
+                        gpu.GPU.draw_pixel([x, y], gpu.GPU.RGB8, [r, g, b])
+                        gpu.GPU.draw_pixel([x, y], gpu.GPU.DEPTH_COMPONENT32F, [z])
 
     @staticmethod
     def triangleSet(point, colors):
@@ -417,31 +421,45 @@ class GL:
         # depois 2, 3 e 4, e assim por diante. Cuidado com a orientação dos vértices, ou seja,
         # todos no sentido horário ou todos no sentido anti-horário, conforme especificado.
 
+        color_per_vertex = True  # Por padrão, assume que há cor por vértice
         emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
-        color = [int(255 * c) for c in emissive]
+        default_rgb = [int(255 * c) for c in emissive]
+
         index = 0
         for count in stripCount:
-            for i in range(count - 2): # cada novo triângulo usa 3 vértices consecutivos (n° triangulos = n° vertices - 2)
-                pts = []
+            for i in range(count - 2): 
+                screen_pts = []
+                screen_colors = []
+                z_values = []
+
                 for j in range(3):  
-                    idx = (index + i + j)
+                    idx = index + i + j
                     x, y, z = point[3*idx], point[3*idx+1], point[3*idx+2]
                     v = np.array([x, y, z, 1])
                     v = GL.model_matrix @ v
                     v = GL.view_matrix @ v
                     v = GL.projection_matrix @ v
                     v /= v[3]
+
+                    z_values.append(v[2])
+
                     screen_matrix = np.array([
-                            [GL.width / 2, 0, 0, GL.width / 2],
-                            [0, -GL.height / 2, 0, GL.height / 2],
-                            [0, 0, 1, 0],
-                            [0, 0, 0, 1]
+                        [GL.width / 2, 0, 0, GL.width / 2],
+                        [0, -GL.height / 2, 0, GL.height / 2],
+                        [0, 0, 1, 0],
+                        [0, 0, 0, 1]
                     ])
                     v = screen_matrix @ v
-                    pts.append((int(v[0]), int(v[1])))
+                    screen_pts.append((int(v[0]), int(v[1])))
+
+                    screen_colors.append(default_rgb)
+
                 if i % 2 == 1:
-                    pts[1], pts[2] = pts[2], pts[1] # corrige orientação
-                GL.draw_triangle(pts, color)
+                    screen_pts[1], screen_pts[2] = screen_pts[2], screen_pts[1]
+                    screen_colors[1], screen_colors[2] = screen_colors[2], screen_colors[1]
+                    z_values[1], z_values[2] = z_values[2], z_values[1]
+
+                GL.draw_triangle(screen_pts, screen_colors, z_values)
             index += count
 
     @staticmethod
@@ -461,12 +479,16 @@ class GL:
         # todos no sentido horário ou todos no sentido anti-horário, conforme especificado.
 
         emissive = colors.get("emissiveColor", [1.0, 1.0, 1.0])
-        color = [int(255 * c) for c in emissive]
+        default_rgb = [int(255 * c) for c in emissive]
         strip = []
+
         for i in index:
-            if i == -1: # fim da sequência de vértices
+            if i == -1:
                 for j in range(len(strip) - 2):
-                    pts = []
+                    screen_pts = []
+                    screen_colors = []
+                    z_values = []
+
                     for k in range(3):
                         idx = strip[j + k]
                         x, y, z = point[3*idx], point[3*idx+1], point[3*idx+2]
@@ -475,6 +497,9 @@ class GL:
                         v = GL.view_matrix @ v
                         v = GL.projection_matrix @ v
                         v /= v[3]
+
+                        z_values.append(v[2])
+
                         screen_matrix = np.array([
                             [GL.width / 2, 0, 0, GL.width / 2],
                             [0, -GL.height / 2, 0, GL.height / 2],
@@ -482,10 +507,15 @@ class GL:
                             [0, 0, 0, 1]
                         ])
                         v = screen_matrix @ v
-                        pts.append((int(v[0]), int(v[1])))
+                        screen_pts.append((int(v[0]), int(v[1])))
+                        screen_colors.append(default_rgb)
+
                     if j % 2 == 1:
-                        pts[1], pts[2] = pts[2], pts[1]
-                    GL.draw_triangle(pts, color)
+                        screen_pts[1], screen_pts[2] = screen_pts[2], screen_pts[1]
+                        screen_colors[1], screen_colors[2] = screen_colors[2], screen_colors[1]
+                        z_values[1], z_values[2] = z_values[2], z_values[1]
+
+                    GL.draw_triangle(screen_pts, screen_colors, z_values)
                 strip = []
             else:
                 strip.append(i)
@@ -542,9 +572,7 @@ class GL:
                         screen_pts.append((int(p_screen[0]), int(p_screen[1])))
 
                         if colorPerVertex and color:
-                            # Se colorIndex estiver presente, usamos posição do vértice no coordIndex
                             if colorIndex:
-                                # Vamos procurar onde este idx aparece no coordIndex
                                 try:
                                     c_idx = coordIndex.index(idx)
                                     c_idx = colorIndex[c_idx] if c_idx < len(colorIndex) else idx
@@ -553,7 +581,6 @@ class GL:
                             else:
                                 c_idx = idx
 
-                            # Pega a cor normalmente
                             if 3 * c_idx + 2 < len(color):
                                 rgb = color[3 * c_idx : 3 * c_idx + 3]
                                 if len(rgb) < 3:
@@ -566,7 +593,6 @@ class GL:
                         rgb = [int(255 * c) for c in rgb]
                         screen_colors.append(rgb)
 
-                    # Chama função modificada para interpolar com Z
                     GL.draw_triangle(screen_pts, screen_colors, z_values)
                 face = []
             else:

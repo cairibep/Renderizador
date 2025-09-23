@@ -72,13 +72,13 @@ class Renderizador:
         )
 
         # Descomente as seguintes linhas se for usar um Framebuffer para profundidade
-        # gpu.GPU.framebuffer_storage(
-        #     self.framebuffers["FRONT"],
-        #     gpu.GPU.DEPTH_ATTACHMENT,
-        #     gpu.GPU.DEPTH_COMPONENT32F,
-        #     self.width,
-        #     self.height
-        # )
+        gpu.GPU.framebuffer_storage(
+            self.framebuffers["FRONT"],
+            gpu.GPU.DEPTH_ATTACHMENT,
+            gpu.GPU.DEPTH_COMPONENT32F,
+            self.width * 2,
+            self.height * 2
+        )
     
         # Opções:
         # - COLOR_ATTACHMENT: alocações para as cores da imagem renderizada
@@ -121,7 +121,7 @@ class Renderizador:
         buffer = gpu.GPU.get_frame_buffer()
         gpu.GPU.bind_framebuffer(gpu.GPU.FRAMEBUFFER, self.framebuffers["OUTPUT"])
         height, width = buffer.shape[:2]
-        
+
         for row in range(0, height, 2):
             for col in range(0, width, 2):
                 pixels_2x2 = buffer[row:row+2, col:col+2]
