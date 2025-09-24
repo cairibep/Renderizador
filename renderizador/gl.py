@@ -54,7 +54,7 @@ class GL:
 
         # Para cada par (x, y) em point
         for i in range(0, len(point), 2):
-            gpu.GPU.draw_pixel([int(point[i]), int(point[i+1])], gpu.GPU.RGB8, color)
+            gpu.GPU.draw_pixel([int(point[i] * 2), int(point[i+1] * 2)], gpu.GPU.RGB8, color)
         
     @staticmethod
     def polyline2D(lineSegments, colors):
@@ -75,10 +75,10 @@ class GL:
 
         # Para cada segmento de linha (ponto i até ponto i+1)
         for i in range(0, len(lineSegments) - 2, 2):
-            x0 = int(lineSegments[i])
-            y0 = int(lineSegments[i+1])
-            x1 = int(lineSegments[i+2])
-            y1 = int(lineSegments[i+3])
+            x0 = int(lineSegments[i] * 2)
+            y0 = int(lineSegments[i+1] * 2)
+            x1 = int(lineSegments[i+2] * 2)
+            y1 = int(lineSegments[i+3] * 2)
 
             # Algoritmo simples de linha (DDA)
             dx = x1 - x0
