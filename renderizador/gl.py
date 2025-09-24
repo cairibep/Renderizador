@@ -189,6 +189,9 @@ class GL:
 
     @staticmethod
     def draw_triangle(pts, colors, z_values, alpha=1.0, uv_coords=None, texture_sampler=None):
+        if uv_coords is None or texture_sampler is None:
+            uv_coords = None
+            texture_sampler = None
         (x0, y0), (x1, y1), (x2, y2) = pts
         c0, c1, c2 = colors
         z0, z1, z2 = z_values
@@ -243,7 +246,7 @@ class GL:
 
                     z_buffer = gpu.GPU.read_pixel([x, y], gpu.GPU.DEPTH_COMPONENT32F)
 
-                    if z < z_buffer:
+                    if z <= z_buffer:
                         if alpha < 1.0:
                             cor_ant = gpu.GPU.read_pixel([x, y], gpu.GPU.RGB8)
                             r_final = int(cor_ant[0] * alpha + r * (1 - alpha))
